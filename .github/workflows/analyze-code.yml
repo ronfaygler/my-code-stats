@@ -46,7 +46,7 @@ jobs:
             while true; do
               local response
               response=$(curl -s -H "Authorization: Bearer $GH_PAT" \
-                "https://api.github.com/user/repos?per_page=100&page=$page&affiliation=owner&type=owner&sort=updated")
+                "https://api.github.com/user/repos?per_page=100&page=$page&affiliation=owner&sort=updated")
 
               if echo "$response" | jq -e 'type == "object" and .message != null' >/dev/null 2>&1; then
                 echo "Authenticated API error: $(echo "$response" | jq -r '.message')"
