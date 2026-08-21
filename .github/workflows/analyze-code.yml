@@ -8,6 +8,8 @@ on:
 jobs:
   count-lines:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       # Check cloc docs for supported languages and exact names (e.g., "Vuejs Component", "C#")
       # HIGHLIGHT_LANGS: show these languages individually; everything else goes to "Others"
@@ -18,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Install required dependencies: jq (JSON processor), cloc (count lines of code), and locale settings
       - name: Install Dependencies
@@ -32,13 +34,47 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          # Get a list of public repositories that are not forks
-          REPOS=$(curl -H "Authorization: token $GH_PAT" -s "https://api.github.com/user/repos?per_page=100" | jq -r '.[] | select(.fork == false) | .full_name') || echo "Error fetching repositories"
+          if [ -z "$GH_PAT" ]; then
+            echo "ERROR: GH_PAT secret is missing. Add it under Settings → Secrets → Actions."
+            exit 1
+          fi
+
+          # Fetch all owned repos (paginated); includes public + private when PAT has repo scope
+          REPOS=""
+          PAGE=1
+          while true; do
+            RESPONSE=$(curl -s -H "Authorization: Bearer $GH_PAT" \
+              "https://api.github.com/user/repos?per_page=100&page=$PAGE&affiliation=owner&type=owner&sort=updated")
+
+            if echo "$RESPONSE" | jq -e 'type == "object" and .message != null' >/dev/null 2>&1; then
+              echo "ERROR: GitHub API rejected the token:"
+              echo "$RESPONSE" | jq -r '.message'
+              echo "Create a classic PAT with the 'repo' scope at https://github.com/settings/tokens"
+              exit 1
+            fi
+
+            COUNT=$(echo "$RESPONSE" | jq 'length')
+            [ "$COUNT" -eq 0 ] && break
+
+            REPOS+=$'\n'"$(echo "$RESPONSE" | jq -r '.[] | select(.fork == false) | .full_name')"
+            PAGE=$((PAGE + 1))
+          done
+
+          REPOS=$(echo "$REPOS" | sed '/^$/d' | sort -u)
+          REPO_COUNT=$(echo "$REPOS" | grep -c . || true)
+          echo "Found $REPO_COUNT non-fork repositories to analyze."
+          if [ "$REPO_COUNT" -eq 0 ]; then
+            echo "ERROR: No repositories found. Check that GH_PAT belongs to your account and has 'repo' scope."
+            exit 1
+          fi
 
           mkdir -p public-repos
           cd public-repos
 
+          CLONED=0
           for REPO in $REPOS; do
+            # Skip this stats repo so it is not counted in the total
+            [ "$REPO" = "${{ github.repository }}" ] && continue
             REPO_URL="https://github.com/$REPO.git"
             AUTHENTICATED_REPO=$(echo "$REPO_URL" | sed "s/https:\/\//https:\/\/$GH_PAT@/g")
             
@@ -46,8 +82,18 @@ jobs:
             DEFAULT_BRANCH=$(curl -H "Authorization: token $GH_PAT" -s "https://api.github.com/repos/$REPO" | jq -r '.default_branch')
 
             echo "Cloning $REPO (default branch: $DEFAULT_BRANCH)..."
-            git clone --branch "$DEFAULT_BRANCH" --single-branch "$AUTHENTICATED_REPO" "$(basename $REPO)-$DEFAULT_BRANCH" || echo "Failed to clone $REPO."
+            if git clone --depth 1 --branch "$DEFAULT_BRANCH" --single-branch "$AUTHENTICATED_REPO" "$(basename $REPO)-$DEFAULT_BRANCH"; then
+              CLONED=$((CLONED + 1))
+            else
+              echo "WARNING: Failed to clone $REPO."
+            fi
           done
+
+          echo "Successfully cloned $CLONED repositories."
+          if [ "$CLONED" -eq 0 ]; then
+            echo "ERROR: Could not clone any repositories. Verify GH_PAT has 'repo' scope."
+            exit 1
+          fi
 
           # Run cloc to analyze lines of code, excluding non-source code files
           echo "Calculating lines of code..."

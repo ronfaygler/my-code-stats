@@ -6,8 +6,9 @@ Total lines of code across all my public GitHub repositories (excluding forks).
 ```
 [ LANGUAGES BREAKDOWN ]
 
+(Waiting for first successful run...)
 
-[ TOTAL LINES OF CODE: 0 ]
+[ TOTAL LINES OF CODE: — ]
 ```
 <!-- LANGUAGES BREAKDOWN END -->
 
