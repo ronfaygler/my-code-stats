@@ -6,9 +6,8 @@ Total lines of code across all my public GitHub repositories (excluding forks).
 ```
 [ LANGUAGES BREAKDOWN ]
 
-(Stats will appear here after the first workflow run)
 
-[ TOTAL LINES OF CODE: — ]
+[ TOTAL LINES OF CODE: 0 ]
 ```
 <!-- LANGUAGES BREAKDOWN END -->
 
