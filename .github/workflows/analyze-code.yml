@@ -35,36 +35,67 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           if [ -z "$GH_PAT" ]; then
-            echo "ERROR: GH_PAT secret is missing. Add it under Settings → Secrets → Actions."
+            echo "::error::GH_PAT secret is missing. In repo Settings → Secrets → Actions, create a secret named exactly GH_PAT (not GHT or anything else)."
             exit 1
           fi
+          echo "GH_PAT secret is configured."
 
-          # Fetch all owned repos (paginated); includes public + private when PAT has repo scope
-          REPOS=""
-          PAGE=1
-          while true; do
-            RESPONSE=$(curl -s -H "Authorization: Bearer $GH_PAT" \
-              "https://api.github.com/user/repos?per_page=100&page=$PAGE&affiliation=owner&type=owner&sort=updated")
+          fetch_repos_authenticated() {
+            local page=1
+            local repos=""
+            while true; do
+              local response
+              response=$(curl -s -H "Authorization: Bearer $GH_PAT" \
+                "https://api.github.com/user/repos?per_page=100&page=$page&affiliation=owner&type=owner&sort=updated")
 
-            if echo "$RESPONSE" | jq -e 'type == "object" and .message != null' >/dev/null 2>&1; then
-              echo "ERROR: GitHub API rejected the token:"
-              echo "$RESPONSE" | jq -r '.message'
-              echo "Create a classic PAT with the 'repo' scope at https://github.com/settings/tokens"
-              exit 1
-            fi
+              if echo "$response" | jq -e 'type == "object" and .message != null' >/dev/null 2>&1; then
+                echo "Authenticated API error: $(echo "$response" | jq -r '.message')"
+                return 1
+              fi
 
-            COUNT=$(echo "$RESPONSE" | jq 'length')
-            [ "$COUNT" -eq 0 ] && break
+              local count
+              count=$(echo "$response" | jq 'length')
+              [ "$count" -eq 0 ] && break
 
-            REPOS+=$'\n'"$(echo "$RESPONSE" | jq -r '.[] | select(.fork == false) | .full_name')"
-            PAGE=$((PAGE + 1))
-          done
+              repos+=$'\n'"$(echo "$response" | jq -r '.[] | select(.fork == false) | .full_name')"
+              page=$((page + 1))
+            done
+            echo "$repos" | sed '/^$/d' | sort -u
+          }
 
-          REPOS=$(echo "$REPOS" | sed '/^$/d' | sort -u)
+          fetch_repos_public() {
+            local owner="${{ github.repository_owner }}"
+            local page=1
+            local repos=""
+            while true; do
+              local response
+              response=$(curl -s "https://api.github.com/users/$owner/repos?per_page=100&page=$page&type=owner&sort=updated")
+
+              local count
+              count=$(echo "$response" | jq 'length')
+              [ "$count" -eq 0 ] && break
+
+              repos+=$'\n'"$(echo "$response" | jq -r '.[] | select(.fork == false) | .full_name')"
+              page=$((page + 1))
+            done
+            echo "$repos" | sed '/^$/d' | sort -u
+          }
+
+          REPOS=$(fetch_repos_authenticated) || REPOS=""
+          if [ -z "$REPOS" ]; then
+            echo "Authenticated repo list was empty or failed; falling back to public repos for ${{ github.repository_owner }}."
+            REPOS=$(fetch_repos_public)
+          fi
+
           REPO_COUNT=$(echo "$REPOS" | grep -c . || true)
           echo "Found $REPO_COUNT non-fork repositories to analyze."
+          echo "$REPOS" | head -20
+          if [ "$REPO_COUNT" -gt 20 ]; then
+            echo "... and $((REPO_COUNT - 20)) more"
+          fi
+
           if [ "$REPO_COUNT" -eq 0 ]; then
-            echo "ERROR: No repositories found. Check that GH_PAT belongs to your account and has 'repo' scope."
+            echo "::error::No repositories found. Use a classic PAT with the 'repo' scope, or a fine-grained PAT with access to all repositories."
             exit 1
           fi
 
@@ -72,26 +103,27 @@ jobs:
           cd public-repos
 
           CLONED=0
+          FAILED=0
           for REPO in $REPOS; do
-            # Skip this stats repo so it is not counted in the total
             [ "$REPO" = "${{ github.repository }}" ] && continue
-            REPO_URL="https://github.com/$REPO.git"
-            AUTHENTICATED_REPO=$(echo "$REPO_URL" | sed "s/https:\/\//https:\/\/$GH_PAT@/g")
-            
-            # Determine the default branch dynamically and clone only that branch
-            DEFAULT_BRANCH=$(curl -H "Authorization: token $GH_PAT" -s "https://api.github.com/repos/$REPO" | jq -r '.default_branch')
 
+            DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer $GH_PAT" \
+              "https://api.github.com/repos/$REPO" | jq -r '.default_branch // "main"')
+
+            CLONE_DIR="$(basename "$REPO")-$DEFAULT_BRANCH"
             echo "Cloning $REPO (default branch: $DEFAULT_BRANCH)..."
-            if git clone --depth 1 --branch "$DEFAULT_BRANCH" --single-branch "$AUTHENTICATED_REPO" "$(basename $REPO)-$DEFAULT_BRANCH"; then
+            if git clone --depth 1 --branch "$DEFAULT_BRANCH" --single-branch \
+              "https://x-access-token:${GH_PAT}@github.com/${REPO}.git" "$CLONE_DIR"; then
               CLONED=$((CLONED + 1))
             else
               echo "WARNING: Failed to clone $REPO."
+              FAILED=$((FAILED + 1))
             fi
           done
 
-          echo "Successfully cloned $CLONED repositories."
+          echo "Successfully cloned $CLONED repositories ($FAILED failed)."
           if [ "$CLONED" -eq 0 ]; then
-            echo "ERROR: Could not clone any repositories. Verify GH_PAT has 'repo' scope."
+            echo "::error::Could not clone any repositories. If you use a fine-grained PAT, grant it access to all repositories (or each repo you want counted)."
             exit 1
           fi
 
