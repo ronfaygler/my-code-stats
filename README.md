@@ -6,9 +6,16 @@ Total lines of code across all my public GitHub repositories (excluding forks).
 ```
 [ LANGUAGES BREAKDOWN ]
 
-(Waiting for first successful run...)
+JavaScript   --> 843,589 lines
+TypeScript   --> 74,927 lines
+Java         --> 3,056 lines
+Python       --> 2,786 lines
+JSX          --> 2,576 lines
+Go           --> 247 lines
+PHP          --> 124 lines
+Others       --> 4,995 lines
 
-[ TOTAL LINES OF CODE: — ]
+[ TOTAL LINES OF CODE: 932,300 ]
 ```
 <!-- LANGUAGES BREAKDOWN END -->
 
